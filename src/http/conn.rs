@@ -1,6 +1,8 @@
+use std::cell::Cell;
 use std::fmt;
 use std::io::{self, Write};
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::time::Instant;
 
 use futures::{Poll, Async, AsyncSink, Stream, Sink, StartSend};
@@ -70,12 +72,13 @@ where I: AsyncRead + AsyncWrite,
 
     fn can_read_body(&self) -> bool {
         match self.state.reading {
+            Reading::Expect(..) |
             Reading::Body(..) => true,
             _ => false,
         }
     }
 
-    fn read_head(&mut self) -> Poll<Option<Frame<http::MessageHead<T::Incoming>, http::Chunk, ::Error>>, io::Error> {
+    fn read_head(&mut self) -> Poll<Option<Frame<http::ConnHead<T::Incoming>, http::Chunk, ::Error>>, io::Error> {
         debug_assert!(self.can_read_head());
         trace!("Conn::read_head");
 
@@ -112,14 +115,20 @@ where I: AsyncRead + AsyncWrite,
                 };
                 self.state.busy();
                 let wants_keep_alive = head.should_keep_alive();
+                let expecting_continue = head.expecting_continue();
                 self.state.keep_alive &= wants_keep_alive;
-                let (body, reading) = if decoder.is_eof() {
-                    (false, Reading::KeepAlive)
+                let (body, reading, channel) = if decoder.is_eof() {
+                    (false, Reading::KeepAlive, None)
                 } else {
-                    (true, Reading::Body(decoder))
+                    if expecting_continue  {
+                        let channel = Rc::new(Cell::new(false));
+                        (true, Reading::Expect(channel.clone(), decoder), Some(channel))
+                    } else {
+                        (true, Reading::Body(decoder), None)
+                    }
                 };
                 self.state.reading = reading;
-                return Ok(Async::Ready(Some(Frame::Message { message: head, body: body })));
+                return Ok(Async::Ready(Some(Frame::Message { message: (head, channel), body: body })));
             },
             _ => {
                 error!("unimplemented HTTP Version = {:?}", version);
@@ -133,6 +142,21 @@ where I: AsyncRead + AsyncWrite,
         debug_assert!(self.can_read_body());
 
         trace!("Conn::read_body");
+
+        let reading = if let Reading::Expect(ref channel, ref decoder) = self.state.reading {
+            if channel.get() {
+                self.io.buffer(b"HTTP/1.1 100 Continue\r\n\r\n");
+                self.io.flush().unwrap();
+                Some(Reading::Body(decoder.clone()))
+            } else {
+                return Ok(Async::NotReady);
+            }
+        } else {
+            None
+        };
+        if let Some(reading) = reading {
+            self.state.reading = reading;
+        }
 
         let (reading, ret) = match self.state.reading {
             Reading::Body(ref mut decoder) => {
@@ -148,7 +172,7 @@ where I: AsyncRead + AsyncWrite,
                 }
 
             },
-            Reading::Init | Reading::KeepAlive | Reading::Closed => unreachable!()
+            Reading::Init | Reading::Expect(..) | Reading::KeepAlive | Reading::Closed => unreachable!()
         };
         self.state.reading = reading;
         ret
@@ -173,6 +197,7 @@ where I: AsyncRead + AsyncWrite,
         // When writing finishes, we need to wake the task up in case there
         // is more reading that can be done, to start a new message.
         match self.state.reading {
+            Reading::Expect(..) |
             Reading::Body(..) |
             Reading::KeepAlive => return,
             Reading::Init |
@@ -221,8 +246,9 @@ where I: AsyncRead + AsyncWrite,
         }
     }
 
-    fn write_head(&mut self, mut head: http::MessageHead<T::Outgoing>, body: bool) -> StartSend<http::MessageHead<T::Outgoing>,io::Error> {
+    fn write_head(&mut self, head: http::ConnHead<T::Outgoing>, body: bool) -> StartSend<http::ConnHead<T::Outgoing>, io::Error> {
         debug_assert!(self.can_write_head());
+        let mut head = head.0;
         if !body {
             head.headers.remove::<TransferEncoding>();
             //TODO: check that this isn't a response to a HEAD
@@ -355,7 +381,7 @@ where I: AsyncRead + AsyncWrite,
       T: Http1Transaction,
       K: KeepAlive,
       T::Outgoing: fmt::Debug {
-    type Item = Frame<http::MessageHead<T::Incoming>, http::Chunk, ::Error>;
+    type Item = Frame<http::ConnHead<T::Incoming>, http::Chunk, ::Error>;
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -390,11 +416,15 @@ where I: AsyncRead + AsyncWrite,
       T: Http1Transaction,
       K: KeepAlive,
       T::Outgoing: fmt::Debug {
-    type SinkItem = Frame<http::MessageHead<T::Outgoing>, B, ::Error>;
+    type SinkItem = Frame<http::ConnHead<T::Outgoing>, B, ::Error>;
     type SinkError = io::Error;
 
     fn start_send(&mut self, frame: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        trace!("Conn::start_send( frame={:?} )", DebugFrame(&frame));
+        // trace!("Conn::start_send( frame={:?} )", DebugFrame(&frame));
+
+        if let Reading::Expect(..) = self.state.reading {
+            self.state.reading = Reading::KeepAlive;
+        }
 
         let frame: Self::SinkItem = match frame {
             Frame::Message { message: head, body } => {
@@ -483,6 +513,7 @@ struct State<B, K> {
 #[derive(Debug)]
 enum Reading {
     Init,
+    Expect(Rc<Cell<bool>>, Decoder),
     Body(Decoder),
     KeepAlive,
     Closed,
@@ -640,7 +671,7 @@ impl<B, K: KeepAlive> State<B, K> {
 
 // The DebugFrame and DebugChunk are simple Debug implementations that allow
 // us to dump the frame into logs, without logging the entirety of the bytes.
-struct DebugFrame<'a, T: fmt::Debug + 'a, B: AsRef<[u8]> + 'a>(&'a Frame<http::MessageHead<T>, B, ::Error>);
+struct DebugFrame<'a, T: fmt::Debug + 'a, B: AsRef<[u8]> + 'a>(&'a Frame<http::ConnHead<T>, B, ::Error>);
 
 impl<'a, T: fmt::Debug + 'a, B: AsRef<[u8]> + 'a> fmt::Debug for DebugFrame<'a, T, B> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -703,7 +734,7 @@ mod tests {
 
         match conn.poll().unwrap() {
             Async::Ready(Some(Frame::Message { message, body: false })) => {
-                assert_eq!(message, MessageHead {
+                assert_eq!(message.0, MessageHead {
                     subject: ::http::RequestLine(::Get, Uri::from_str("/").unwrap()),
                     .. MessageHead::default()
                 })

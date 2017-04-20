@@ -151,10 +151,10 @@ impl<B> fmt::Debug for Http<B> {
 
 #[doc(hidden)]
 #[allow(missing_debug_implementations)]
-pub struct __ProtoRequest(http::RequestHead);
+pub struct __ProtoRequest(http::ConnHead<http::RequestLine>);
 #[doc(hidden)]
 #[allow(missing_debug_implementations)]
-pub struct __ProtoResponse(ResponseHead);
+pub struct __ProtoResponse(http::ConnHead<::StatusCode>);
 #[doc(hidden)]
 #[allow(missing_debug_implementations)]
 pub struct __ProtoTransport<T, B>(http::Conn<T, B, http::ServerTransaction>);
@@ -291,9 +291,9 @@ impl<B> Into<Message<__ProtoResponse, B>> for Response<B> {
     fn into(self) -> Message<__ProtoResponse, B> {
         let (head, body) = response::split(self);
         if let Some(body) = body {
-            Message::WithBody(__ProtoResponse(head), body.into())
+            Message::WithBody(__ProtoResponse((head, None)), body.into())
         } else {
-            Message::WithoutBody(__ProtoResponse(head))
+            Message::WithoutBody(__ProtoResponse((head, None)))
         }
     }
 }
@@ -302,8 +302,6 @@ struct HttpService<T> {
     inner: T,
     remote_addr: SocketAddr,
 }
-
-type ResponseHead = http::MessageHead<::StatusCode>;
 
 impl<T, B> Service for HttpService<T>
     where T: Service<Request=Request, Response=Response<B>, Error=::Error>,

@@ -1,4 +1,4 @@
-#![deny(warnings)]
+// #![deny(warnings)]
 extern crate hyper;
 extern crate futures;
 extern crate spmc;
@@ -114,6 +114,20 @@ impl Service for TestService {
     fn call(&self, req: Request) -> Self::Future {
         let tx = self.tx.clone();
         let replies = self.reply.clone();
+        /*let mut res = Response::new();
+        while let Ok(reply) = replies.try_recv() {
+            match reply {
+                Reply::Status(s) => {
+                    res.set_status(s);
+                },
+                Reply::Headers(headers) => {
+                    *res.headers_mut() = headers;
+                },
+                Reply::Body(body) => {
+                    res.set_body(body);
+                },
+            }
+        }*/
         req.body().for_each(move |chunk| {
             tx.lock().unwrap().send(Msg::Chunk(chunk.to_vec())).unwrap();
             Ok(())
@@ -222,6 +236,32 @@ fn server_get_with_body() {
     req.read(&mut [0; 256]).unwrap();
 
     // note: doesn't include trailing \r\n, cause Content-Length wasn't 21
+    assert_eq!(server.body(), b"I'm a good request.");
+}
+
+#[test]
+fn server_get_with_expect() {
+    let server = serve();
+    server.reply()
+        .status(hyper::Ok)
+        .header(hyper::header::ContentLength(0));
+    let mut req = connect(server.addr());
+    req.write_all(b"\
+        GET / HTTP/1.1\r\n\
+        Host: example.domain\r\n\
+        Content-Length: 19\r\n\
+        Expect: 100-continue\r\n\
+        Connection: keep-alive\r\n\
+        \r\n\
+    ").unwrap();
+
+    let mut data = String::new();
+    req.read_to_string(&mut data).is_ok();
+    assert_eq!(data, "HTTP/1.1 100 Continue\r\n\r\n");
+
+    req.write_all(b"I'm a good request.\r\n").unwrap();
+    req.read(&mut [0; 256]).unwrap();
+
     assert_eq!(server.body(), b"I'm a good request.");
 }
 

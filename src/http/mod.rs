@@ -1,10 +1,12 @@
 //! Pieces pertaining to the HTTP message protocol.
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::fmt;
+use std::rc::Rc;
 
 use bytes::BytesMut;
 
-use header::{Connection, ConnectionOption};
+use header::{Connection, ConnectionOption, Expect};
 use header::Headers;
 use method::Method;
 use status::StatusCode;
@@ -49,8 +51,10 @@ pub struct MessageHead<S> {
     /// Subject (request line or status line) of Incoming message.
     pub subject: S,
     /// Headers of the Incoming message.
-    pub headers: Headers
+    pub headers: Headers,
 }
+
+pub type ConnHead<T> = (MessageHead<T>, Option<Rc<Cell<bool>>>);
 
 /// An incoming request message.
 pub type RequestHead = MessageHead<RequestLine>;
@@ -70,6 +74,13 @@ pub type ResponseHead = MessageHead<RawStatus>;
 impl<S> MessageHead<S> {
     pub fn should_keep_alive(&self) -> bool {
         should_keep_alive(self.version, &self.headers)
+    }
+
+    pub fn expecting_continue(&self) -> bool {
+        match (self.version, self.headers.get::<Expect>()) {
+            (Http11, Some(expect)) if expect == &Expect::Continue => true,
+            _ => false
+        }
     }
 }
 

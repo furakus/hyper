@@ -1,7 +1,9 @@
+use std::cell::Cell;
 use std::fmt;
+use std::rc::Rc;
 
 use header::Headers;
-use http::{Body, MessageHead, RequestHead, RequestLine};
+use http::{Body, ConnHead, MessageHead, RequestHead, RequestLine};
 use method::Method;
 use uri::{self, Uri};
 use version::HttpVersion;
@@ -16,6 +18,7 @@ pub struct Request<B = Body> {
     body: Option<B>,
     is_proxy: bool,
     remote_addr: Option<SocketAddr>,
+    channel: Option<Rc<Cell<bool>>>,
 }
 
 impl<B> Request<B> {
@@ -30,6 +33,7 @@ impl<B> Request<B> {
             body: None,
             is_proxy: false,
             remote_addr: None,
+            channel: None,
         }
     }
 
@@ -113,7 +117,12 @@ impl Request<Body> {
 
     /// Take the Request body.
     #[inline]
-    pub fn body(self) -> Body { self.body.unwrap_or_default() }
+    pub fn body(self) -> Body {
+        if let Some(channel) = self.channel {
+            channel.set(true);
+        }
+        self.body.unwrap_or_default()
+    }
 }
 
 impl<B> fmt::Debug for Request<B> {
@@ -140,8 +149,8 @@ impl<'a> fmt::Display for MaybeAddr<'a> {
 }
 
 /// Constructs a request using a received ResponseHead and optional body
-pub fn from_wire<B>(addr: Option<SocketAddr>, incoming: RequestHead, body: B) -> Request<B> {
-    let MessageHead { version, subject: RequestLine(method, uri), headers } = incoming;
+pub fn from_wire<B>(addr: Option<SocketAddr>, incoming: ConnHead<RequestLine>, body: B) -> Request<B> {
+    let (MessageHead { version, subject: RequestLine(method, uri), headers}, channel) = incoming;
     debug!("Request::new: addr={}, req=\"{} {} {}\"", MaybeAddr(&addr), method, uri, version);
     debug!("Request::new: headers={:?}", headers);
 
@@ -153,6 +162,7 @@ pub fn from_wire<B>(addr: Option<SocketAddr>, incoming: RequestHead, body: B) ->
         remote_addr: addr,
         body: Some(body),
         is_proxy: false,
+        channel: channel,
     }
 }
 

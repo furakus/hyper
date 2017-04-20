@@ -187,16 +187,16 @@ where C: Connect,
         let req = race.and_then(move |client| {
             let msg = match body {
                 Some(body) => {
-                    Message::WithBody(head, body.into())
+                    Message::WithBody((head, None), body.into())
                 },
-                None => Message::WithoutBody(head),
+                None => Message::WithoutBody((head, None)),
             };
             client.call(msg)
         });
         FutureResponse(Box::new(req.map(|msg| {
             match msg {
-                Message::WithoutBody(head) => response::from_wire(head, None),
-                Message::WithBody(head, body) => response::from_wire(head, Some(body.into())),
+                Message::WithoutBody(head) => response::from_wire(head.0, None),
+                Message::WithBody(head, body) => response::from_wire(head.0, Some(body.into())),
             }
         })))
     }
@@ -219,7 +219,7 @@ impl<C, B> fmt::Debug for Client<C, B> {
     }
 }
 
-type TokioClient<B> = ClientProxy<Message<http::RequestHead, B>, Message<http::ResponseHead, TokioBody>, ::Error>;
+type TokioClient<B> = ClientProxy<Message<http::ConnHead<http::RequestLine>, B>, Message<http::ConnHead<http::RawStatus>, TokioBody>, ::Error>;
 
 struct HttpClient<B> {
     client_rx: RefCell<Option<oneshot::Receiver<Pooled<TokioClient<B>>>>>,
@@ -230,9 +230,9 @@ where T: AsyncRead + AsyncWrite + 'static,
       B: Stream<Error=::Error> + 'static,
       B::Item: AsRef<[u8]>,
 {
-    type Request = http::RequestHead;
+    type Request = http::ConnHead<http::RequestLine>;
     type RequestBody = B::Item;
-    type Response = http::ResponseHead;
+    type Response = http::ConnHead<http::RawStatus>;
     type ResponseBody = http::Chunk;
     type Error = ::Error;
     type Transport = http::Conn<T, B::Item, http::ClientTransaction, Pooled<TokioClient<B>>>;

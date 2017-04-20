@@ -1,4 +1,4 @@
-// #![deny(warnings)]
+#![deny(warnings)]
 extern crate hyper;
 extern crate futures;
 extern crate spmc;
@@ -114,20 +114,6 @@ impl Service for TestService {
     fn call(&self, req: Request) -> Self::Future {
         let tx = self.tx.clone();
         let replies = self.reply.clone();
-        /*let mut res = Response::new();
-        while let Ok(reply) = replies.try_recv() {
-            match reply {
-                Reply::Status(s) => {
-                    res.set_status(s);
-                },
-                Reply::Headers(headers) => {
-                    *res.headers_mut() = headers;
-                },
-                Reply::Body(body) => {
-                    res.set_body(body);
-                },
-            }
-        }*/
         req.body().for_each(move |chunk| {
             tx.lock().unwrap().send(Msg::Chunk(chunk.to_vec())).unwrap();
             Ok(())
@@ -255,9 +241,9 @@ fn server_get_with_expect() {
         \r\n\
     ").unwrap();
 
-    let mut data = String::new();
-    req.read_to_string(&mut data).is_ok();
-    assert_eq!(data, "HTTP/1.1 100 Continue\r\n\r\n");
+    let mut data = [0u8; 256];
+    let len = req.read(&mut data).unwrap();
+    assert_eq!(&data[0..len], b"HTTP/1.1 100 Continue\r\n\r\n");
 
     req.write_all(b"I'm a good request.\r\n").unwrap();
     req.read(&mut [0; 256]).unwrap();

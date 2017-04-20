@@ -145,6 +145,7 @@ where I: AsyncRead + AsyncWrite,
 
         let reading = if let Reading::Expect(ref channel, ref decoder) = self.state.reading {
             if channel.get() {
+                //TODO: handle when there isn't enough room to buffer the head
                 self.io.buffer(b"HTTP/1.1 100 Continue\r\n\r\n");
                 self.io.flush().unwrap();
                 Some(Reading::Body(decoder.clone()))
@@ -420,7 +421,7 @@ where I: AsyncRead + AsyncWrite,
     type SinkError = io::Error;
 
     fn start_send(&mut self, frame: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        // trace!("Conn::start_send( frame={:?} )", DebugFrame(&frame));
+        trace!("Conn::start_send( frame={:?} )", DebugFrame(&frame));
 
         if let Reading::Expect(..) = self.state.reading {
             self.state.reading = Reading::KeepAlive;

@@ -185,11 +185,11 @@ where I: AsyncRead + AsyncWrite,
             // us that it is ready until we drain it. However, we're currently
             // finished reading, so we need to park the task to be able to
             // wake back up later when more reading should happen.
-            self.state.read_task = Some(::futures::task::park());
+            self.state.read_task = Some(::futures::task::current());
         }
     }
 
-    fn maybe_unpark(&mut self) {
+    fn maybe_notify(&mut self) {
         // its possible that we returned NotReady from poll() without having
         // exhausted the underlying Io. We would have done this when we
         // determined we couldn't keep reading until we knew how writing
@@ -214,13 +214,13 @@ where I: AsyncRead + AsyncWrite,
         }
 
         if let Some(task) = self.state.read_task.take() {
-            task.unpark();
+            task.notify();
         }
     }
 
     fn try_keep_alive(&mut self) {
         self.state.try_keep_alive();
-        self.maybe_unpark();
+        self.maybe_notify();
     }
 
     fn can_write_head(&self) -> bool {
@@ -263,7 +263,7 @@ where I: AsyncRead + AsyncWrite,
         let wants_keep_alive = head.should_keep_alive();
         self.state.keep_alive &= wants_keep_alive;
         let mut buf = Vec::new();
-        let encoder = T::encode(&mut head, &mut buf);
+        let encoder = T::encode(head, &mut buf);
         //TODO: handle when there isn't enough room to buffer the head
         assert!(self.io.buffer(buf) > 0);
         self.state.writing = if body {
@@ -870,21 +870,22 @@ mod tests {
     #[test]
     fn test_conn_parking() {
         use std::sync::Arc;
-        use futures::executor::Unpark;
+        use futures::executor::Notify;
+        use futures::executor::NotifyHandle;
 
         struct Car {
             permit: bool,
         }
-        impl Unpark for Car {
-            fn unpark(&self) {
+        impl Notify for Car {
+            fn notify(&self, _id: usize) {
                 assert!(self.permit, "unparked without permit");
             }
         }
 
-        fn car(permit: bool) -> Arc<Unpark> {
+        fn car(permit: bool) -> NotifyHandle {
             Arc::new(Car {
                 permit: permit,
-            })
+            }).into()
         }
 
         // test that once writing is done, unparks
@@ -898,7 +899,7 @@ mod tests {
             assert!(conn.poll_complete().unwrap().is_ready());
             Ok::<(), ()>(())
         });
-        ::futures::executor::spawn(f).poll_future(car(true)).unwrap();
+        ::futures::executor::spawn(f).poll_future_notify(&car(true), 0).unwrap();
 
 
         // test that flushing when not waiting on read doesn't unpark
@@ -909,7 +910,7 @@ mod tests {
             assert!(conn.poll_complete().unwrap().is_ready());
             Ok::<(), ()>(())
         });
-        ::futures::executor::spawn(f).poll_future(car(false)).unwrap();
+        ::futures::executor::spawn(f).poll_future_notify(&car(false), 0).unwrap();
 
 
         // test that flushing and writing isn't done doesn't unpark
@@ -922,7 +923,7 @@ mod tests {
             assert!(conn.poll_complete().unwrap().is_ready());
             Ok::<(), ()>(())
         });
-        ::futures::executor::spawn(f).poll_future(car(false)).unwrap();
+        ::futures::executor::spawn(f).poll_future_notify(&car(false), 0).unwrap();
     }
 
     #[test]

@@ -128,12 +128,12 @@ where I: AsyncRead + AsyncWrite,
                     }
                 };
                 self.state.reading = reading;
-                return Ok(Async::Ready(Some(Frame::Message { message: (head, channel), body: body })));
+                Ok(Async::Ready(Some(Frame::Message { message: (head, channel), body: body })))
             },
             _ => {
                 error!("unimplemented HTTP Version = {:?}", version);
                 self.state.close_read();
-                return Ok(Async::Ready(Some(Frame::Error { error: ::Error::Version })));
+                Ok(Async::Ready(Some(Frame::Error { error: ::Error::Version })))
             }
         }
     }
@@ -164,12 +164,10 @@ where I: AsyncRead + AsyncWrite,
                 let slice = try_nb!(decoder.decode(&mut self.io));
                 if !slice.is_empty() {
                     return Ok(Async::Ready(Some(http::Chunk::from(slice))));
+                } else if decoder.is_eof() {
+                    (Reading::KeepAlive, Ok(Async::Ready(None)))
                 } else {
-                    if decoder.is_eof() {
-                        (Reading::KeepAlive, Ok(Async::Ready(None)))
-                    } else {
-                        (Reading::Closed, Ok(Async::Ready(None)))
-                    }
+                    (Reading::Closed, Ok(Async::Ready(None)))
                 }
 
             },

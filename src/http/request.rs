@@ -9,7 +9,7 @@ use uri::{self, Uri};
 use version::HttpVersion;
 use std::net::SocketAddr;
 
-/// A client request to a remote server.
+/// An HTTP Request
 pub struct Request<B = Body> {
     method: Method,
     uri: Uri,
@@ -95,6 +95,10 @@ impl<B> Request<B> {
     pub fn set_version(&mut self, version: HttpVersion) { self.version = version; }
 
     /// Set the body of the request.
+    ///
+    /// By default, the body will be sent using `Transfer-Encoding: chunked`. To
+    /// override this behavior, manually set a [`ContentLength`] header with the
+    /// length of `body`.
     #[inline]
     pub fn set_body<T: Into<B>>(&mut self, body: T) { self.body = Some(body.into()); }
 
@@ -142,16 +146,18 @@ struct MaybeAddr<'a>(&'a Option<SocketAddr>);
 impl<'a> fmt::Display for MaybeAddr<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self.0 {
-            Some(ref addr) => fmt::Display::fmt(addr, f),
-            None => f.write_str("None"),
+            Some(ref addr) => {
+                write!(f, "addr={}, ", addr)
+            },
+            None => Ok(()),
         }
     }
 }
 
 /// Constructs a request using a received ResponseHead and optional body
 pub fn from_wire<B>(addr: Option<SocketAddr>, incoming: ConnHead<RequestLine>, body: B) -> Request<B> {
-    let (MessageHead { version, subject: RequestLine(method, uri), headers}, channel) = incoming;
-    debug!("Request::new: addr={}, req=\"{} {} {}\"", MaybeAddr(&addr), method, uri, version);
+    let (MessageHead { version, subject: RequestLine(method, uri), headers }, channel) = incoming;
+    info!("Request::new: {}\"{} {} {}\"", MaybeAddr(&addr), method, uri, version);
     debug!("Request::new: headers={:?}", headers);
 
     Request::<B> {

@@ -202,8 +202,8 @@ impl<'a, 'b> Formatter<'a, 'b> {
     pub fn fmt_line(&mut self, line: &fmt::Display) -> fmt::Result {
         use std::fmt::Write;
         match self.0 {
-            Multi::Line(ref name, ref mut f) => {
-                try!(f.write_str(*name));
+            Multi::Line(name, ref mut f) => {
+                try!(f.write_str(name));
                 try!(f.write_str(": "));
                 try!(write!(NewlineReplacer(*f), "{}", line));
                 f.write_str("\r\n")
@@ -256,6 +256,7 @@ impl<'a, H: Header> fmt::Debug for HeaderValueString<'a, H> {
 struct NewlineReplacer<'a, F: fmt::Write + 'a>(&'a mut F);
 
 impl<'a, F: fmt::Write + 'a> fmt::Write for NewlineReplacer<'a, F> {
+    #[inline]
     fn write_str(&mut self, s: &str) -> fmt::Result {
         let mut since = 0;
         for (i, &byte) in s.as_bytes().iter().enumerate() {
@@ -270,6 +271,11 @@ impl<'a, F: fmt::Write + 'a> fmt::Write for NewlineReplacer<'a, F> {
         } else {
             Ok(())
         }
+    }
+
+    #[inline]
+    fn write_fmt(&mut self, args: fmt::Arguments) -> fmt::Result {
+        fmt::write(self, args)
     }
 }
 
@@ -338,6 +344,7 @@ macro_rules! literals {
                 _ => ()
             }
 
+            trace!("maybe_literal not found, copying {:?}", s);
             Cow::Owned(s.to_owned())
         }
 
@@ -391,7 +398,7 @@ impl Headers {
     pub fn set<H: Header>(&mut self, value: H) {
         trace!("Headers.set( {:?}, {:?} )", header_name::<H>(), HeaderValueString(&value));
         self.data.insert(HeaderName(Ascii::new(Cow::Borrowed(header_name::<H>()))),
-                         Item::new_typed(Box::new(value)));
+                         Item::new_typed(value));
     }
 
     /// Get a reference to the header field's value, if it exists.
@@ -539,7 +546,8 @@ impl PartialEq for Headers {
 }
 
 impl fmt::Display for Headers {
-   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for header in self.iter() {
             try!(fmt::Display::fmt(&header, f));
         }
@@ -548,6 +556,7 @@ impl fmt::Display for Headers {
 }
 
 impl fmt::Debug for Headers {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_map()
             .entries(self.iter().map(|view| (view.0.as_ref(), ValueString(view.1))))
@@ -610,12 +619,14 @@ impl<'a> HeaderView<'a> {
 }
 
 impl<'a> fmt::Display for HeaderView<'a> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.1.write_h1(&mut Formatter(Multi::Line(self.0.as_ref(), f)))
     }
 }
 
 impl<'a> fmt::Debug for HeaderView<'a> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
@@ -659,8 +670,9 @@ impl<'a> FromIterator<HeaderView<'a>> for Headers {
 struct HeaderName(Ascii<Cow<'static, str>>);
 
 impl fmt::Display for HeaderName {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
+        fmt::Display::fmt(self.0.as_ref(), f)
     }
 }
 
@@ -671,10 +683,11 @@ impl AsRef<str> for HeaderName {
 }
 
 impl PartialEq for HeaderName {
+    #[inline]
     fn eq(&self, other: &HeaderName) -> bool {
         let s = self.as_ref();
         let k = other.as_ref();
-        if s.len() == k.len() && s.as_ptr() == k.as_ptr() {
+        if s.as_ptr() == k.as_ptr() && s.len() == k.len() {
             true
         } else {
             self.0 == other.0
@@ -685,7 +698,7 @@ impl PartialEq for HeaderName {
 impl PartialEq<HeaderName> for str {
     fn eq(&self, other: &HeaderName) -> bool {
         let k = other.as_ref();
-        if self.len() == k.len() && self.as_ptr() == k.as_ptr() {
+        if self.as_ptr() == k.as_ptr() && self.len() == k.len() {
             true
         } else {
             other.0 == self
@@ -966,9 +979,46 @@ mod tests {
 
     #[cfg(feature = "nightly")]
     #[bench]
+    fn bench_headers_get_miss_previous_10(b: &mut Bencher) {
+        let mut headers = Headers::new();
+        for i in 0..10 {
+            headers.set_raw(format!("non-standard-{}", i), "hi");
+        }
+        b.iter(|| assert!(headers.get::<ContentLength>().is_none()))
+    }
+
+    #[cfg(feature = "nightly")]
+    #[bench]
     fn bench_headers_set(b: &mut Bencher) {
         let mut headers = Headers::new();
         b.iter(|| headers.set(ContentLength(12)))
+    }
+
+    #[cfg(feature = "nightly")]
+    #[bench]
+    fn bench_headers_set_previous_10(b: &mut Bencher) {
+        let mut headers = Headers::new();
+        for i in 0..10 {
+            headers.set_raw(format!("non-standard-{}", i), "hi");
+        }
+        b.iter(|| headers.set(ContentLength(12)))
+    }
+
+    #[cfg(feature = "nightly")]
+    #[bench]
+    fn bench_headers_set_raw(b: &mut Bencher) {
+        let mut headers = Headers::new();
+        b.iter(|| headers.set_raw("non-standard", "hello"))
+    }
+
+    #[cfg(feature = "nightly")]
+    #[bench]
+    fn bench_headers_set_raw_previous_10(b: &mut Bencher) {
+        let mut headers = Headers::new();
+        for i in 0..10 {
+            headers.set_raw(format!("non-standard-{}", i), "hi");
+        }
+        b.iter(|| headers.set_raw("non-standard", "hello"))
     }
 
     #[cfg(feature = "nightly")]
@@ -992,8 +1042,16 @@ mod tests {
     #[cfg(feature = "nightly")]
     #[bench]
     fn bench_headers_fmt(b: &mut Bencher) {
+        use std::fmt::Write;
+        let mut buf = String::with_capacity(64);
         let mut headers = Headers::new();
         headers.set(ContentLength(11));
-        b.iter(|| headers.to_string())
+        headers.set(ContentType::json());
+        b.bytes = headers.to_string().len() as u64;
+        b.iter(|| {
+            let _ = write!(buf, "{}", headers);
+            ::test::black_box(&buf);
+            unsafe { buf.as_mut_vec().set_len(0); }
+        })
     }
 }

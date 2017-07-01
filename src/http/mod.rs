@@ -17,7 +17,6 @@ use version::HttpVersion::{Http10, Http11};
 pub use self::conn::{Conn, KeepAlive, KA};
 pub use self::body::{Body, TokioBody};
 pub use self::chunk::Chunk;
-pub use self::str::ByteStr;
 
 mod body;
 mod chunk;
@@ -25,23 +24,9 @@ mod conn;
 mod io;
 mod h1;
 //mod h2;
-mod str;
 pub mod request;
 pub mod response;
 
-/*
-macro_rules! nonblocking {
-    ($e:expr) => ({
-        match $e {
-            Ok(n) => Ok(Some(n)),
-            Err(e) => match e.kind() {
-                stdio::ErrorKind::WouldBlock => Ok(None),
-                _ => Err(e)
-            }
-        }
-    });
-}
-*/
 
 /// An Incoming Message head. Includes request/status line, and headers.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -77,10 +62,7 @@ impl<S> MessageHead<S> {
     }
 
     pub fn expecting_continue(&self) -> bool {
-        match (self.version, self.headers.get::<Expect>()) {
-            (Http11, Some(expect)) if expect == &Expect::Continue => true,
-            _ => false
-        }
+        expecting_continue(self.version, &self.headers)
     }
 }
 
@@ -145,6 +127,17 @@ pub fn should_keep_alive(version: HttpVersion, headers: &Headers) -> bool {
     ret
 }
 
+/// Checks if a connection is expecting a `100 Continue` before sending its body.
+#[inline]
+pub fn expecting_continue(version: HttpVersion, headers: &Headers) -> bool {
+    let ret = match (version, headers.get::<Expect>()) {
+        (Http11, Some(&Expect::Continue)) => true,
+        _ => false
+    };
+    trace!("expecting_continue(version={:?}, header={:?}) = {:?}", version, headers.get::<Expect>(), ret);
+    ret
+}
+
 #[derive(Debug)]
 pub enum ServerTransaction {}
 
@@ -193,4 +186,16 @@ fn test_should_keep_alive() {
     headers.set(Connection::keep_alive());
     assert!(should_keep_alive(Http10, &headers));
     assert!(should_keep_alive(Http11, &headers));
+}
+
+#[test]
+fn test_expecting_continue() {
+    let mut headers = Headers::new();
+
+    assert!(!expecting_continue(Http10, &headers));
+    assert!(!expecting_continue(Http11, &headers));
+
+    headers.set(Expect::Continue);
+    assert!(!expecting_continue(Http10, &headers));
+    assert!(expecting_continue(Http11, &headers));
 }

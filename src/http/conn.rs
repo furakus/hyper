@@ -291,6 +291,10 @@ where I: AsyncRead + AsyncWrite,
                     return Ok(AsyncSink::NotReady(chunk));
                 }
                 if let Some(chunk) = chunk {
+                    if chunk.as_ref().is_empty() {
+                        return Ok(AsyncSink::Ready);
+                    }
+
                     let mut cursor = Cursor::new(chunk);
                     match encoder.encode(&mut self.io, cursor.buf()) {
                         Ok(n) => {
@@ -826,6 +830,8 @@ mod tests {
 
     #[test]
     fn test_conn_body_write_length() {
+        extern crate pretty_env_logger;
+        let _ = pretty_env_logger::init();
         let _: Result<(), ()> = future::lazy(|| {
             let io = AsyncIo::new_buf(vec![], 0);
             let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());

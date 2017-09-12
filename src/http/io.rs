@@ -6,7 +6,7 @@ use std::ptr;
 use futures::{Async, Poll};
 use tokio_io::{AsyncRead, AsyncWrite};
 
-use http::{Http1Transaction, MessageHead, DebugTruncate};
+use http::{Http1Transaction, MessageHead};
 use bytes::{BytesMut, Bytes};
 
 const INIT_BUFFER_SIZE: usize = 8192;
@@ -132,7 +132,7 @@ impl<T: Write> Write for Buffered<T> {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
         let n = self.write_buf.buffer(data);
         if n == 0 {
-            Err(io::Error::from(io::ErrorKind::WouldBlock))
+            Err(io::ErrorKind::WouldBlock.into())
         } else {
             Ok(n)
         }
@@ -220,8 +220,9 @@ impl<T: AsRef<[u8]>> Cursor<T> {
 
 impl<T: AsRef<[u8]>> fmt::Debug for Cursor<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_tuple("Cursor")
-            .field(&DebugTruncate(self.buf()))
+        f.debug_struct("Cursor")
+            .field("pos", &self.pos)
+            .field("len", &self.bytes.as_ref().len())
             .finish()
     }
 }

@@ -3,6 +3,11 @@
 //! A `Server` is created to listen on a port, parse HTTP requests, and hand
 //! them off to a `Service`.
 
+#[cfg(feature = "compat")]
+mod compat_impl;
+#[cfg(feature = "compat")]
+pub mod compat;
+
 use std::cell::RefCell;
 use std::fmt;
 use std::io;
@@ -16,6 +21,9 @@ use futures::task::{self, Task};
 use futures::{Future, Stream, Poll, Async, Sink, StartSend, AsyncSink};
 use futures::future::Map;
 
+#[cfg(feature = "compat")]
+use http_types;
+
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio::reactor::{Core, Handle, Timeout};
 use tokio::net::TcpListener;
@@ -27,6 +35,8 @@ pub use tokio_service::{NewService, Service};
 use http;
 use http::response;
 use http::request;
+#[cfg(feature = "compat")]
+use http::Body;
 
 pub use http::response::Response;
 pub use http::request::Request;
@@ -39,6 +49,7 @@ pub use http::request::Request;
 /// configured with various protocol-level options such as keepalive.
 pub struct Http<B = ::Chunk> {
     keep_alive: bool,
+    pipeline: bool,
     _marker: PhantomData<B>,
 }
 
@@ -63,6 +74,7 @@ impl<B: AsRef<[u8]> + 'static> Http<B> {
     pub fn new() -> Http<B> {
         Http {
             keep_alive: true,
+            pipeline: false,
             _marker: PhantomData,
         }
     }
@@ -72,6 +84,16 @@ impl<B: AsRef<[u8]> + 'static> Http<B> {
     /// Default is true.
     pub fn keep_alive(&mut self, val: bool) -> &mut Self {
         self.keep_alive = val;
+        self
+    }
+
+    /// Aggregates flushes to better support pipelined responses.
+    ///
+    /// Experimental, may be have bugs.
+    ///
+    /// Default is false.
+    pub fn pipeline(&mut self, enabled: bool) -> &mut Self {
+        self.pipeline = enabled;
         self
     }
 
@@ -86,8 +108,7 @@ impl<B: AsRef<[u8]> + 'static> Http<B> {
     /// The returned `Server` contains one method, `run`, which is used to
     /// actually run the server.
     pub fn bind<S, Bd>(&self, addr: &SocketAddr, new_service: S) -> ::Result<Server<S, Bd>>
-        where S: NewService<Request = Request, Response = Response<Bd>, Error = ::Error> +
-                    Send + Sync + 'static,
+        where S: NewService<Request = Request, Response = Response<Bd>, Error = ::Error> + 'static,
               Bd: Stream<Item=B, Error=::Error>,
     {
         let core = try!(Core::new());
@@ -101,6 +122,18 @@ impl<B: AsRef<[u8]> + 'static> Http<B> {
             protocol: self.clone(),
             shutdown_timeout: Duration::new(1, 0),
         })
+    }
+
+    /// Bind a `NewService` using types from the `http` crate.
+    ///
+    /// See `Http::bind`.
+    #[cfg(feature = "compat")]
+    pub fn bind_compat<S, Bd>(&self, addr: &SocketAddr, new_service: S) -> ::Result<Server<compat::NewCompatService<S>, Bd>>
+        where S: NewService<Request = http_types::Request<Body>, Response = http_types::Response<Bd>, Error = ::Error> +
+                    Send + Sync + 'static,
+              Bd: Stream<Item=B, Error=::Error>,
+    {
+        self.bind(addr, self::compat_impl::new_service(new_service))
     }
 
     /// Use this `Http` instance to create a new server task which handles the
@@ -131,6 +164,25 @@ impl<B: AsRef<[u8]> + 'static> Http<B> {
             remote_addr: remote_addr,
         })
     }
+
+    /// Bind a `Service` using types from the `http` crate.
+    ///
+    /// See `Http::bind_connection`.
+    #[cfg(feature = "compat")]
+    pub fn bind_connection_compat<S, I, Bd>(&self,
+                                 handle: &Handle,
+                                 io: I,
+                                 remote_addr: SocketAddr,
+                                 service: S)
+        where S: Service<Request = http_types::Request<Body>, Response = http_types::Response<Bd>, Error = ::Error> + 'static,
+              Bd: Stream<Item=B, Error=::Error> + 'static,
+              I: AsyncRead + AsyncWrite + 'static,
+    {
+        self.bind_server(handle, io, HttpService {
+            inner: compat_impl::service(service),
+            remote_addr: remote_addr,
+        })
+    }
 }
 
 impl<B> Clone for Http<B> {
@@ -145,6 +197,7 @@ impl<B> fmt::Debug for Http<B> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Http")
             .field("keep_alive", &self.keep_alive)
+            .field("pipeline", &self.pipeline)
             .finish()
     }
 }
@@ -183,8 +236,10 @@ impl<T, B> ServerProto<T> for Http<B>
         } else {
             http::KA::Disabled
         };
+        let mut conn = http::Conn::new(io, ka);
+        conn.set_flush_pipeline(self.pipeline);
         __ProtoBindTransport {
-            inner: future::ok(http::Conn::new(io, ka)),
+            inner: future::ok(conn),
         }
     }
 }
@@ -335,8 +390,7 @@ impl<T, B> Service for HttpService<T>
 }
 
 impl<S, B> Server<S, B>
-    where S: NewService<Request = Request, Response = Response<B>, Error = ::Error>
-                + Send + Sync + 'static,
+    where S: NewService<Request = Request, Response = Response<B>, Error = ::Error> + 'static,
           B: Stream<Error=::Error> + 'static,
           B::Item: AsRef<[u8]>,
 {

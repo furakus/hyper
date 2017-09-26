@@ -49,6 +49,38 @@ where I: AsyncRead + AsyncWrite,
         }
     }
 
+    pub fn set_flush_pipeline(&mut self, enabled: bool) {
+        self.io.set_flush_pipeline(enabled);
+    }
+
+    fn poll2(&mut self) -> Poll<Option<Frame<http::ConnHead<T::Incoming>, http::Chunk, ::Error>>, io::Error> {
+        trace!("Conn::poll()");
+
+        loop {
+            if self.is_read_closed() {
+                trace!("Conn::poll when closed");
+                return Ok(Async::Ready(None));
+            } else if self.can_read_head() {
+                return self.read_head();
+            } else if self.can_write_continue() {
+                try_nb!(self.flush());
+            } else if self.can_read_body() {
+                return self.read_body()
+                    .map(|async| async.map(|chunk| Some(Frame::Body {
+                        chunk: chunk
+                    })))
+                    .or_else(|err| {
+                        self.state.close_read();
+                        Ok(Async::Ready(Some(Frame::Error { error: err.into() })))
+                    });
+            } else {
+                trace!("poll when on keep-alive");
+                self.maybe_park_read();
+                return Ok(Async::NotReady);
+            }
+        }
+    }
+
     fn is_read_closed(&self) -> bool {
         self.state.is_read_closed()
     }
@@ -92,11 +124,8 @@ where I: AsyncRead + AsyncWrite,
                 self.state.close_read();
                 self.io.consume_leading_lines();
                 let was_mid_parse = !self.io.read_buf().is_empty();
-                return if was_mid_parse {
+                return if was_mid_parse || must_respond_with_error {
                     debug!("parse error ({}) with {} bytes", e, self.io.read_buf().len());
-                    Ok(Async::Ready(Some(Frame::Error { error: e })))
-                } else if must_respond_with_error {
-                    trace!("parse error with 0 input, err = {:?}", e);
                     Ok(Async::Ready(Some(Frame::Error { error: e })))
                 } else {
                     debug!("read eof");
@@ -204,13 +233,13 @@ where I: AsyncRead + AsyncWrite,
         //
         // When writing finishes, we need to wake the task up in case there
         // is more reading that can be done, to start a new message.
-        match self.state.reading {
+        let wants_read = match self.state.reading {
             Reading::Expect(..) |
             Reading::Body(..) |
             Reading::KeepAlive => return,
-            Reading::Init |
-            Reading::Closed => (),
-        }
+            Reading::Init => true,
+            Reading::Closed => false,
+        };
 
         match self.state.writing {
             Writing::Continue(..) |
@@ -222,6 +251,19 @@ where I: AsyncRead + AsyncWrite,
         }
 
         if !self.io.is_read_blocked() {
+            if wants_read && self.io.read_buf().is_empty() {
+                match self.io.read_from_io() {
+                    Ok(Async::Ready(_)) => (),
+                    Ok(Async::NotReady) => {
+                        trace!("maybe_notify; read_from_io blocked");
+                        return
+                    },
+                    Err(e) => {
+                        trace!("maybe_notify read_from_io error: {}", e);
+                        self.state.close();
+                    }
+                }
+            }
             if let Some(ref task) = self.state.read_task {
                 task.notify();
             }
@@ -401,32 +443,12 @@ where I: AsyncRead + AsyncWrite,
     type Item = Frame<http::ConnHead<T::Incoming>, http::Chunk, ::Error>;
     type Error = io::Error;
 
+    #[inline]
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        trace!("Conn::poll()");
-
-        loop {
-            if self.is_read_closed() {
-                trace!("Conn::poll when closed");
-                return Ok(Async::Ready(None));
-            } else if self.can_read_head() {
-                return self.read_head();
-            } else if self.can_write_continue() {
-                try_nb!(self.flush());
-            } else if self.can_read_body() {
-                return self.read_body()
-                    .map(|async| async.map(|chunk| Some(Frame::Body {
-                        chunk: chunk
-                    })))
-                    .or_else(|err| {
-                        self.state.close_read();
-                        Ok(Async::Ready(Some(Frame::Error { error: err.into() })))
-                    });
-            } else {
-                trace!("poll when on keep-alive");
-                self.maybe_park_read();
-                return Ok(Async::NotReady);
-            }
-        }
+        self.poll2().map_err(|err| {
+            debug!("poll error: {}", err);
+            err
+        })
     }
 }
 
@@ -486,16 +508,22 @@ where I: AsyncRead + AsyncWrite,
 
     }
 
+    #[inline]
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
         trace!("Conn::poll_complete()");
-        let ret = self.flush();
-        trace!("Conn::flush = {:?}", ret);
-        ret
+        self.flush().map_err(|err| {
+            debug!("error writing: {}", err);
+            err
+        })
     }
 
+    #[inline]
     fn close(&mut self) -> Poll<(), Self::SinkError> {
         try_ready!(self.poll_complete());
-        self.io.io_mut().shutdown()
+        self.io.io_mut().shutdown().map_err(|err| {
+            debug!("error closing: {}", err);
+            err
+        })
     }
 }
 

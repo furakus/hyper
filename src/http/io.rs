@@ -13,6 +13,7 @@ const INIT_BUFFER_SIZE: usize = 8192;
 pub const MAX_BUFFER_SIZE: usize = 8192 + 4096 * 100;
 
 pub struct Buffered<T> {
+    flush_pipeline: bool,
     io: T,
     read_blocked: bool,
     read_buf: BytesMut,
@@ -31,11 +32,16 @@ impl<T> fmt::Debug for Buffered<T> {
 impl<T: AsyncRead + AsyncWrite> Buffered<T> {
     pub fn new(io: T) -> Buffered<T> {
         Buffered {
+            flush_pipeline: false,
             io: io,
             read_buf: BytesMut::with_capacity(0),
             write_buf: WriteBuf::new(),
             read_blocked: false,
         }
+    }
+
+    pub fn set_flush_pipeline(&mut self, enabled: bool) {
+        self.flush_pipeline = enabled;
     }
 
     pub fn read_buf(&self) -> &[u8] {
@@ -86,9 +92,13 @@ impl<T: AsyncRead + AsyncWrite> Buffered<T> {
         }
     }
 
-    fn read_from_io(&mut self) -> Poll<usize, io::Error> {
+    pub fn read_from_io(&mut self) -> Poll<usize, io::Error> {
         use bytes::BufMut;
-        // TODO: Investigate if we still need these unsafe blocks
+        self.read_blocked = false;
+        //TODO: use io.read_buf(), so we don't have to zero memory
+        //Reason this doesn't use it yet is because benchmarks show the
+        //slightest **decrease** in performance. Switching should be done
+        //when it doesn't cost anything.
         if self.read_buf.remaining_mut() < INIT_BUFFER_SIZE {
             self.read_buf.reserve(INIT_BUFFER_SIZE);
             unsafe { // Zero out unused memory
@@ -97,13 +107,11 @@ impl<T: AsyncRead + AsyncWrite> Buffered<T> {
                 ptr::write_bytes(buf.as_mut_ptr(), 0, len);
             }
         }
-        self.read_blocked = false;
-        unsafe { // Can we use AsyncRead::read_buf instead?
+        unsafe {
             let n = match self.io.read(self.read_buf.bytes_mut()) {
                 Ok(n) => n,
                 Err(e) => {
                     if e.kind() == io::ErrorKind::WouldBlock {
-                        // TODO: Push this out, ideally, into http::Conn.
                         self.read_blocked = true;
                         return Ok(Async::NotReady);
                     }
@@ -139,7 +147,9 @@ impl<T: Write> Write for Buffered<T> {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if self.write_buf.remaining() == 0 {
+        if self.flush_pipeline && self.read_buf.is_empty() {
+            Ok(())
+        } else if self.write_buf.remaining() == 0 {
             self.io.flush()
         } else {
             loop {

@@ -463,6 +463,73 @@ fn expect_continue() {
     assert_eq!(body, msg);
 }
 
+#[test]
+fn pipeline_disabled() {
+    let server = serve();
+    let mut req = connect(server.addr());
+    server.reply().status(hyper::Ok);
+    server.reply().status(hyper::Ok);
+
+    req.write_all(b"\
+        GET / HTTP/1.1\r\n\
+        Host: example.domain\r\n\
+        \r\n\
+        GET / HTTP/1.1\r\n\
+        Host: example.domain\r\n\
+        \r\n\
+    ").expect("write 1");
+
+    let mut buf = vec![0; 4096];
+    let n = req.read(&mut buf).expect("read 1");
+    assert_ne!(n, 0);
+    // Woah there. What?
+    //
+    // This test is wishy-washy because of race conditions in access of the
+    // socket. The test is still useful, since it allows for the responses
+    // to be received in 2 reads. But it might sometimes come in 1 read.
+    //
+    // TODO: add in a delay to the `ServeReply` interface, to allow this
+    // delay to prevent the 2 writes from happening before this test thread
+    // can read from the socket.
+    match req.read(&mut buf) {
+        Ok(n) => {
+            // won't be 0, because we didn't say to close, and so socket
+            // will be open until `server` drops
+            assert_ne!(n, 0);
+        }
+        Err(_) => (),
+    }
+}
+
+#[test]
+fn pipeline_enabled() {
+    let server = serve_with_options(ServeOptions {
+        pipeline: true,
+        .. Default::default()
+    });
+    let mut req = connect(server.addr());
+    server.reply().status(hyper::Ok);
+    server.reply().status(hyper::Ok);
+
+    req.write_all(b"\
+        GET / HTTP/1.1\r\n\
+        Host: example.domain\r\n\
+        \r\n\
+        GET / HTTP/1.1\r\n\
+        Host: example.domain\r\n\
+        Connection: close\r\n\
+        \r\n\
+    ").expect("write 1");
+
+    let mut buf = vec![0; 4096];
+    let n = req.read(&mut buf).expect("read 1");
+    assert_ne!(n, 0);
+    // with pipeline enabled, both responses should have been in the first read
+    // so a second read should be EOF
+    let n = req.read(&mut buf).expect("read 2");
+    assert_eq!(n, 0);
+}
+
 // -------------------------------------------------
 // the Server that is used to run all the tests with
 // -------------------------------------------------
@@ -553,8 +620,6 @@ impl NewService for TestService {
     fn new_service(&self) -> std::io::Result<TestService> {
         Ok(self.clone())
     }
-
-
 }
 
 impl Service for TestService {
@@ -603,6 +668,7 @@ fn serve() -> Serve {
 #[derive(Default)]
 struct ServeOptions {
     keep_alive_disabled: bool,
+    pipeline: bool,
     timeout: Option<Duration>,
 }
 
@@ -617,15 +683,19 @@ fn serve_with_options(options: ServeOptions) -> Serve {
     let addr = "127.0.0.1:0".parse().unwrap();
 
     let keep_alive = !options.keep_alive_disabled;
+    let pipeline = options.pipeline;
     let dur = options.timeout;
 
     let thread_name = format!("test-server-{:?}", dur);
     let thread = thread::Builder::new().name(thread_name).spawn(move || {
-        let srv = Http::new().keep_alive(keep_alive).bind(&addr, TestService {
-            tx: Arc::new(Mutex::new(msg_tx.clone())),
-            _timeout: dur,
-            reply: reply_rx,
-        }).unwrap();
+        let srv = Http::new()
+            .keep_alive(keep_alive)
+            .pipeline(pipeline)
+            .bind(&addr, TestService {
+                tx: Arc::new(Mutex::new(msg_tx.clone())),
+                _timeout: dur,
+                reply: reply_rx,
+            }).unwrap();
         addr_tx.send(srv.local_addr().unwrap()).unwrap();
         srv.run_until(shutdown_rx.then(|_| Ok(()))).unwrap();
     }).unwrap();

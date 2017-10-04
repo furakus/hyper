@@ -106,3 +106,12 @@ impl Extend<u8> for Chunk {
         }
     }
 }
+
+impl Chunk {
+    /// Get internal bytes.
+    pub fn into_bytes(self) -> Bytes {
+        match self.0 {
+            Inner::Shared(bytes) => bytes,
+        }
+    }
+}

@@ -10,6 +10,7 @@ use super::{Http1Transaction, MessageHead};
 use bytes::{BytesMut, Bytes};
 
 const INIT_BUFFER_SIZE: usize = 8192;
+const REF_BUFFER_SIZE: usize = 32768;
 pub const MAX_BUFFER_SIZE: usize = 8192 + 4096 * 100;
 
 pub struct Buffered<T> {
@@ -170,15 +171,16 @@ pub trait MemRead {
 
 impl<T: AsyncRead + AsyncWrite> MemRead for Buffered<T> {
     fn read_mem(&mut self, len: usize) -> Poll<Bytes, io::Error> {
-        trace!("Buffered.read_mem read_buf={}, wanted={}", self.read_buf.len(), len);
-        if !self.read_buf.is_empty() {
-            let n = ::std::cmp::min(len, self.read_buf.len());
-            trace!("Buffered.read_mem read_buf is not empty, slicing {}", n);
-            Ok(Async::Ready(self.read_buf.split_to(n).freeze()))
-        } else {
+        let mut buf_len = self.read_buf.len();
+        while buf_len < len && buf_len < REF_BUFFER_SIZE {
             let n = try_ready!(self.read_from_io());
-            Ok(Async::Ready(self.read_buf.split_to(::std::cmp::min(len, n)).freeze()))
+            if n == 0 {
+                break;
+            }
+            buf_len += n;
         }
+        let split_len = ::std::cmp::min(len, ::std::cmp::min(buf_len, REF_BUFFER_SIZE * 2));
+        Ok(Async::Ready(self.read_buf.split_to(split_len).freeze()))
     }
 }
 

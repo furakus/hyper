@@ -1,3 +1,54 @@
+### v0.11.6 (2017-10-02)
+
+
+#### Bug Fixes
+
+* **server:** fix experimental pipeline flushing ([6b4635fd](https://github.com/hyperium/hyper/commit/6b4635fd13f5fe91ad6d388c5e66394627ad7ba2))
+
+
+### v0.11.5 (2017-10-02)
+
+
+#### Bug Fixes
+
+* **http:** avoid infinite recursion when Body::from is called with Cow::Owned. (#1343) ([e8d61737](https://github.com/hyperium/hyper/commit/e8d6173734b0fb43bf7401fdbe43258d913a6284))
+
+
+### v0.11.4 (2017-09-28)
+
+
+#### Bug Fixes
+
+* **client:**  fix panic in Pool ([0fbc215f](https://github.com/hyperium/hyper/commit/0fbc215f), closes [#1339](https://github.com/hyperium/hyper/issues/1339))
+
+
+### v0.11.3 (2017-09-28)
+
+
+#### Features
+
+* **header:**  add ContentType::xml() constructor ([92595e84](https://github.com/hyperium/hyper/commit/92595e84))
+* **http:**  add Body::from(cow) for bytes and strings ([425ff71d](https://github.com/hyperium/hyper/commit/425ff71d))
+* **lib:**  implement compatibility with http crate ([0c7d375b](https://github.com/hyperium/hyper/commit/0c7d375b))
+* **server:**
+  *  add experimental pipeline flush aggregation option to Http ([dd54f20b](https://github.com/hyperium/hyper/commit/dd54f20b))
+  *  remove unneeded Send + Sync from Server ([16e834d3](https://github.com/hyperium/hyper/commit/16e834d3))
+
+#### Bug Fixes
+
+* **client:**
+  *  cleanup dropped pending Checkouts from Pool ([3b91fc65](https://github.com/hyperium/hyper/commit/3b91fc65), closes [#1315](https://github.com/hyperium/hyper/issues/1315))
+  *  return Version errors if unsupported ([41c47241](https://github.com/hyperium/hyper/commit/41c47241), closes [#1283](https://github.com/hyperium/hyper/issues/1283))
+* **http:**  log errors passed to tokio at debug level ([971864c4](https://github.com/hyperium/hyper/commit/971864c4), closes [#1278](https://github.com/hyperium/hyper/issues/1278))
+* **lib:**
+  *  Export hyper::RawStatus if the raw_status feature is enabled ([627c4e3d](https://github.com/hyperium/hyper/commit/627c4e3d))
+  *  remove logs that contain request and response data ([207fca63](https://github.com/hyperium/hyper/commit/207fca63), closes [#1281](https://github.com/hyperium/hyper/issues/1281))
+
+#### Performance
+
+* **server:**  try to read from socket at keep-alive ([1a9f2648](https://github.com/hyperium/hyper/commit/1a9f2648))
+
+
 ### v0.11.2 (2017-07-27)
 
 

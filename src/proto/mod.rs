@@ -41,9 +41,6 @@ pub struct MessageHead<S> {
 
 pub type ConnHead<T> = (MessageHead<T>, Option<Rc<Cell<bool>>>);
 
-/// An incoming request message.
-pub type RequestHead = MessageHead<RequestLine>;
-
 #[derive(Debug, Default, PartialEq)]
 pub struct RequestLine(pub Method, pub Uri);
 

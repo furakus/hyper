@@ -1,13 +1,13 @@
 use std::io::{Error as IoError};
 
 use futures::{Future, Poll};
-use http_types;
+use http;
 use tokio_service::{NewService, Service};
 
 use error::Error;
-use http::Body;
-use http::request::Request;
-use http::response::Response;
+use proto::Body;
+use proto::request::Request;
+use proto::response::Response;
 
 /// Wraps a `Future` returning an `http::Response` into
 /// a `Future` returning a `hyper::server::Response`.
@@ -17,7 +17,7 @@ pub struct CompatFuture<F> {
 }
 
 impl<F, Bd> Future for CompatFuture<F>
-    where F: Future<Item=http_types::Response<Bd>, Error=Error>
+    where F: Future<Item=http::Response<Bd>, Error=Error>
 {
     type Item = Response<Bd>;
     type Error = Error;
@@ -41,7 +41,7 @@ pub fn service<S>(service: S) -> CompatService<S> {
 }
 
 impl<S, Bd> Service for CompatService<S>
-    where S: Service<Request=http_types::Request<Body>, Response=http_types::Response<Bd>, Error=Error>
+    where S: Service<Request=http::Request<Body>, Response=http::Response<Bd>, Error=Error>
 {
     type Request = Request;
     type Response = Response<Bd>;
@@ -68,7 +68,7 @@ pub fn new_service<S>(new_service: S) -> NewCompatService<S> {
 }
 
 impl<S, Bd> NewService for NewCompatService<S>
-    where S: NewService<Request=http_types::Request<Body>, Response=http_types::Response<Bd>, Error=Error>
+    where S: NewService<Request=http::Request<Body>, Response=http::Response<Bd>, Error=Error>
 {
     type Request = Request;
     type Response = Response<Bd>;

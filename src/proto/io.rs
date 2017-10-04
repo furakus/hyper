@@ -6,7 +6,7 @@ use std::ptr;
 use futures::{Async, Poll};
 use tokio_io::{AsyncRead, AsyncWrite};
 
-use http::{Http1Transaction, MessageHead};
+use super::{Http1Transaction, MessageHead};
 use bytes::{BytesMut, Bytes};
 
 const INIT_BUFFER_SIZE: usize = 8192;
@@ -147,7 +147,7 @@ impl<T: Write> Write for Buffered<T> {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if self.flush_pipeline && self.read_buf.is_empty() {
+        if self.flush_pipeline && !self.read_buf.is_empty() {
             Ok(())
         } else if self.write_buf.remaining() == 0 {
             self.io.flush()

@@ -9,9 +9,9 @@ use futures::task::Task;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_proto::streaming::pipeline::{Frame, Transport};
 
-use http::{self, Http1Transaction};
-use http::io::{Cursor, Buffered};
-use http::h1::{Encoder, Decoder};
+use proto::{Http1Transaction};
+use super::io::{Cursor, Buffered};
+use super::h1::{Encoder, Decoder};
 use method::Method;
 use version::HttpVersion;
 
@@ -53,7 +53,7 @@ where I: AsyncRead + AsyncWrite,
         self.io.set_flush_pipeline(enabled);
     }
 
-    fn poll2(&mut self) -> Poll<Option<Frame<http::ConnHead<T::Incoming>, http::Chunk, ::Error>>, io::Error> {
+    fn poll2(&mut self) -> Poll<Option<Frame<super::ConnHead<T::Incoming>, super::Chunk, ::Error>>, io::Error> {
         trace!("Conn::poll()");
 
         loop {
@@ -112,7 +112,7 @@ where I: AsyncRead + AsyncWrite,
         }
     }
 
-    fn read_head(&mut self) -> Poll<Option<Frame<http::ConnHead<T::Incoming>, http::Chunk, ::Error>>, io::Error> {
+    fn read_head(&mut self) -> Poll<Option<Frame<super::ConnHead<T::Incoming>, super::Chunk, ::Error>>, io::Error> {
         debug_assert!(self.can_read_head());
         trace!("Conn::read_head");
 
@@ -169,7 +169,7 @@ where I: AsyncRead + AsyncWrite,
         }
     }
 
-    fn read_body(&mut self) -> Poll<Option<http::Chunk>, io::Error> {
+    fn read_body(&mut self) -> Poll<Option<super::Chunk>, io::Error> {
         debug_assert!(self.can_read_body());
 
         trace!("Conn::read_body");
@@ -195,7 +195,7 @@ where I: AsyncRead + AsyncWrite,
             Reading::Body(ref mut decoder) => {
                 let slice = try_ready!(decoder.decode(&mut self.io));
                 if !slice.is_empty() {
-                    return Ok(Async::Ready(Some(http::Chunk::from(slice))));
+                    return Ok(Async::Ready(Some(super::Chunk::from(slice))));
                 } else if decoder.is_eof() {
                     (Reading::KeepAlive, Ok(Async::Ready(None)))
                 } else {
@@ -300,7 +300,7 @@ where I: AsyncRead + AsyncWrite,
         }
     }
 
-    fn write_head(&mut self, head: http::ConnHead<T::Outgoing>, body: bool) {
+    fn write_head(&mut self, head: super::ConnHead<T::Outgoing>, body: bool) {
         debug_assert!(self.can_write_head());
 
         let head = head.0;
@@ -440,7 +440,7 @@ where I: AsyncRead + AsyncWrite,
       T: Http1Transaction,
       K: KeepAlive,
       T::Outgoing: fmt::Debug {
-    type Item = Frame<http::ConnHead<T::Incoming>, http::Chunk, ::Error>;
+    type Item = Frame<super::ConnHead<T::Incoming>, super::Chunk, ::Error>;
     type Error = io::Error;
 
     #[inline]
@@ -458,7 +458,7 @@ where I: AsyncRead + AsyncWrite,
       T: Http1Transaction,
       K: KeepAlive,
       T::Outgoing: fmt::Debug {
-    type SinkItem = Frame<http::ConnHead<T::Outgoing>, B, ::Error>;
+    type SinkItem = Frame<super::ConnHead<T::Outgoing>, B, ::Error>;
     type SinkError = io::Error;
 
     #[inline]
@@ -719,7 +719,7 @@ impl<B, K: KeepAlive> State<B, K> {
 
 // The DebugFrame and DebugChunk are simple Debug implementations that allow
 // us to dump the frame into logs, without logging the entirety of the bytes.
-struct DebugFrame<'a, T: fmt::Debug + 'a, B: AsRef<[u8]> + 'a>(&'a Frame<http::ConnHead<T>, B, ::Error>);
+struct DebugFrame<'a, T: fmt::Debug + 'a, B: AsRef<[u8]> + 'a>(&'a Frame<super::ConnHead<T>, B, ::Error>);
 
 impl<'a, T: fmt::Debug + 'a, B: AsRef<[u8]> + 'a> fmt::Debug for DebugFrame<'a, T, B> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -754,8 +754,8 @@ mod tests {
     use futures::future;
     use tokio_proto::streaming::pipeline::Frame;
 
-    use http::{self, MessageHead, ServerTransaction};
-    use http::h1::Encoder;
+    use proto::{self, MessageHead, ServerTransaction};
+    use super::super::h1::Encoder;
     use mock::AsyncIo;
 
     use super::{Conn, Reading, Writing};
@@ -777,12 +777,12 @@ mod tests {
         let good_message = b"GET / HTTP/1.1\r\n\r\n".to_vec();
         let len = good_message.len();
         let io = AsyncIo::new_buf(good_message, len);
-        let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+        let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
 
         match conn.poll().unwrap() {
             Async::Ready(Some(Frame::Message { message, body: false })) => {
                 assert_eq!(message.0, MessageHead {
-                    subject: ::http::RequestLine(::Get, Uri::from_str("/").unwrap()),
+                    subject: ::proto::RequestLine(::Get, Uri::from_str("/").unwrap()),
                     .. MessageHead::default()
                 })
             },
@@ -795,7 +795,7 @@ mod tests {
         let _: Result<(), ()> = future::lazy(|| {
             let good_message = b"GET / HTTP/1.1\r\nHost: foo.bar\r\n\r\n".to_vec();
             let io = AsyncIo::new_buf(good_message, 10);
-            let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+            let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
             assert!(conn.poll().unwrap().is_not_ready());
             conn.io.io_mut().block_in(50);
             let async = conn.poll().unwrap();
@@ -811,7 +811,7 @@ mod tests {
     #[test]
     fn test_conn_init_read_eof_idle() {
         let io = AsyncIo::new_buf(vec![], 1);
-        let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+        let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
         conn.state.idle();
 
         match conn.poll().unwrap() {
@@ -823,7 +823,7 @@ mod tests {
     #[test]
     fn test_conn_init_read_eof_idle_partial_parse() {
         let io = AsyncIo::new_buf(b"GET / HTTP/1.1".to_vec(), 100);
-        let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+        let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
         conn.state.idle();
 
         match conn.poll().unwrap() {
@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn test_conn_init_read_eof_busy() {
         let io = AsyncIo::new_buf(vec![], 1);
-        let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+        let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
         conn.state.busy();
 
         match conn.poll().unwrap() {
@@ -847,7 +847,7 @@ mod tests {
     #[test]
     fn test_conn_closed_read() {
         let io = AsyncIo::new_buf(vec![], 0);
-        let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+        let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
         conn.state.close();
 
         match conn.poll().unwrap() {
@@ -862,8 +862,8 @@ mod tests {
         let _ = pretty_env_logger::init();
         let _: Result<(), ()> = future::lazy(|| {
             let io = AsyncIo::new_buf(vec![], 0);
-            let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
-            let max = ::http::io::MAX_BUFFER_SIZE + 4096;
+            let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
+            let max = ::proto::io::MAX_BUFFER_SIZE + 4096;
             conn.state.writing = Writing::Body(Encoder::length((max * 2) as u64), None);
 
             assert!(conn.start_send(Frame::Body { chunk: Some(vec![b'a'; 1024 * 8].into()) }).unwrap().is_ready());
@@ -890,7 +890,7 @@ mod tests {
     fn test_conn_body_write_chunked() {
         let _: Result<(), ()> = future::lazy(|| {
             let io = AsyncIo::new_buf(vec![], 4096);
-            let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+            let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
             conn.state.writing = Writing::Body(Encoder::chunked(), None);
 
             assert!(conn.start_send(Frame::Body { chunk: Some("headers".into()) }).unwrap().is_ready());
@@ -903,7 +903,7 @@ mod tests {
     fn test_conn_body_flush() {
         let _: Result<(), ()> = future::lazy(|| {
             let io = AsyncIo::new_buf(vec![], 1024 * 1024 * 5);
-            let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+            let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
             conn.state.writing = Writing::Body(Encoder::length(1024 * 1024), None);
             assert!(conn.start_send(Frame::Body { chunk: Some(vec![b'a'; 1024 * 1024].into()) }).unwrap().is_ready());
             assert!(conn.state.writing.is_queued());
@@ -939,7 +939,7 @@ mod tests {
         // test that once writing is done, unparks
         let f = future::lazy(|| {
             let io = AsyncIo::new_buf(vec![], 4096);
-            let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+            let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
             conn.state.reading = Reading::KeepAlive;
             assert!(conn.poll().unwrap().is_not_ready());
 
@@ -953,7 +953,7 @@ mod tests {
         // test that flushing when not waiting on read doesn't unpark
         let f = future::lazy(|| {
             let io = AsyncIo::new_buf(vec![], 4096);
-            let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+            let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
             conn.state.writing = Writing::KeepAlive;
             assert!(conn.poll_complete().unwrap().is_ready());
             Ok::<(), ()>(())
@@ -964,7 +964,7 @@ mod tests {
         // test that flushing and writing isn't done doesn't unpark
         let f = future::lazy(|| {
             let io = AsyncIo::new_buf(vec![], 4096);
-            let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+            let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
             conn.state.reading = Reading::KeepAlive;
             assert!(conn.poll().unwrap().is_not_ready());
             conn.state.writing = Writing::Body(Encoder::length(5_000), None);
@@ -977,7 +977,7 @@ mod tests {
     #[test]
     fn test_conn_closed_write() {
         let io = AsyncIo::new_buf(vec![], 0);
-        let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+        let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
         conn.state.close();
 
         match conn.start_send(Frame::Body { chunk: Some(b"foobar".to_vec().into()) }) {
@@ -991,7 +991,7 @@ mod tests {
     #[test]
     fn test_conn_write_empty_chunk() {
         let io = AsyncIo::new_buf(vec![], 0);
-        let mut conn = Conn::<_, http::Chunk, ServerTransaction>::new(io, Default::default());
+        let mut conn = Conn::<_, proto::Chunk, ServerTransaction>::new(io, Default::default());
         conn.state.writing = Writing::KeepAlive;
 
         assert!(conn.start_send(Frame::Body { chunk: None }).unwrap().is_ready());
